@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📄 Invoice Generator</h1>
+            <p>Create professional invoices instantly</p>
+        </header>
+
+        <form id="invoiceForm" class="form-container">
+            <!-- Required Fields Section -->
+            <section class="form-section">
+                <h2>Required Information</h2>
+                
+                <div class="form-group">
+                    <label for="company_name">Company Name *</label>
+                    <input type="text" id="company_name" name="company_name" required placeholder="Enter company name">
+                </div>
+
+                <div class="form-group">
+                    <label for="sakadastro">Sakadastro *</label>
+                    <input type="text" id="sakadastro" name="sakadastro" required placeholder="Enter sakadastro">
+                </div>
+
+                <div class="form-group">
+                    <label for="address">Address *</label>
+                    <input type="text" id="address" name="address" required placeholder="Enter address">
+                </div>
+
+                <div class="form-group">
+                    <label for="invoice_number">Invoice Number *</label>
+                    <input type="text" id="invoice_number" name="invoice_number" required placeholder="Enter invoice number">
+                </div>
+
+                <div class="form-group">
+                    <label for="output_filename">Output Filename *</label>
+                    <input type="text" id="output_filename" name="output_filename" required placeholder="invoice" value="invoice">
+                    <small>.xlsx will be added automatically</small>
+                </div>
+            </section>
+
+            <!-- Items Section -->
+            <section class="form-section">
+                <h2>Items (Optional)</h2>
+                <div id="itemsContainer"></div>
+                <button type="button" id="addItemBtn" class="btn-secondary">+ Add Item</button>
+            </section>
+
+            <!-- PDF Option -->
+            <section class="form-section">
+                <div class="form-group checkbox">
+                    <input type="checkbox" id="generate_pdf" name="generate_pdf">
+                    <label for="generate_pdf">Generate PDF as well</label>
+                </div>
+            </section>
+
+            <!-- Submit Button -->
+            <div class="form-actions">
+                <button type="submit" class="btn-primary">Generate Invoice</button>
+            </div>
+
+            <!-- Status Message -->
+            <div id="statusMessage" class="status-hidden"></div>
+        </form>
+
+        <!-- Results Section -->
+        <section id="results" class="results-section hidden">
+            <h2>Your Files</h2>
+            <div class="files-container">
+                <div id="excelFile" class="file-item">
+                    <span class="file-icon">📊</span>
+                    <span id="excelFileName" class="file-name"></span>
+                    <a id="excelDownload" class="btn-download">Download</a>
+                </div>
+                <div id="pdfFile" class="file-item hidden">
+                    <span class="file-icon">📕</span>
+                    <span id="pdfFileName" class="file-name"></span>
+                    <a id="pdfDownload" class="btn-download">Download</a>
+                </div>
+            </div>
+            <button type="button" id="newInvoiceBtn" class="btn-secondary">Create Another Invoice</button>
+        </section>
+
+        <footer>
+            <p>Invoice Generator • Make invoices from template</p>
+        </footer>
+    </div>
+
+    <!-- Item Template (hidden) -->
+    <template id="itemTemplate">
+        <div class="item-card">
+            <div class="item-number"></div>
+            <div class="form-group">
+                <label>Type</label>
+                <input type="text" class="item-type" placeholder="Product or Service" required>
+            </div>
+            <div class="form-group">
+                <label>Quantity</label>
+                <input type="number" class="item-quantity" placeholder="0" step="0.01">
+            </div>
+            <div class="form-group">
+                <label>Price</label>
+                <input type="number" class="item-price" placeholder="0.00" step="0.01">
+            </div>
+            <button type="button" class="btn-remove">Remove</button>
+        </div>
+    </template>
+
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>

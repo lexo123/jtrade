@@ -1,0 +1,6 @@
+openpyxl>=3.0.0
+xlrd>=2.0.0
+pandas>=1.0.0
+openpyxl-utils>=0.6.0
+flask>=2.0.0
+werkzeug>=2.0.0
