@@ -307,3 +307,8 @@ if __name__ == "__main__":
     ]
     
     generator.generate_multiple(".", changes_list)
+cd /tmp
+curl -L --output :.tgz "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.tgz"
+tar -xzf cloudflared.tgz
+sudo mv cloudflared /usr/local/bin/
+sudo chmod +x /usr/local/bin/cloudflared
