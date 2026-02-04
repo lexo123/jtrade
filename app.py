@@ -78,7 +78,7 @@ def generate():
         address = data.get('address', '').strip()
         invoice_number = data.get('invoice_number', '').strip()
         output_filename = data.get('output_filename', 'invoice').strip()
-        generate_pdf = data.get('generate_pdf', False)
+        generate_pdf = data.get('generate_pdf', True)  # Default to True to always generate PDF
         
         # Validate required fields
         if not all([company_name, sakadastro, address, invoice_number, output_filename]):

@@ -79,7 +79,7 @@ function handleSubmit(e) {
         address: address,
         invoice_number: invoice_number,
         output_filename: output_filename,
-        generate_pdf: document.getElementById('generate_pdf').checked,
+        generate_pdf: true,  // Always generate PDF
         items: getItems()
     };
     
