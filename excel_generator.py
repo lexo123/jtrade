@@ -12,6 +12,7 @@ from copy import copy
 from pathlib import Path
 import xlrd
 import subprocess
+import shutil
 
 
 class ExcelTemplateGenerator:
@@ -91,15 +92,254 @@ class ExcelTemplateGenerator:
         
         return xlsx_wb
     
+    def _modify_excel_in_place(self, excel_path, company_name, sakadastro, address, invoice_number, changes, items):
+        """
+        Modify Excel file in-place using XML manipulation to preserve images.
+        This modifies the worksheet XML directly without losing image references.
+        """
+        try:
+            from zipfile import ZipFile, ZIP_DEFLATED
+            import tempfile
+            import xml.etree.ElementTree as ET
+
+            # Create temp directory
+            temp_dir = tempfile.mkdtemp()
+
+            # Extract the Excel file
+            with ZipFile(excel_path, 'r') as z:
+                z.extractall(temp_dir)
+
+            # Find the correct worksheet XML file
+            import glob
+            sheet_xml_paths = glob.glob(os.path.join(temp_dir, 'xl', 'worksheets', '*.xml'))
+            if not sheet_xml_paths:
+                raise Exception("No worksheet XML files found in Excel archive")
+
+            # Use the first worksheet (typically sheet1.xml)
+            sheet_xml_path = sheet_xml_paths[0]
+            
+            # Parse XML
+            ET.register_namespace('', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main')
+            ET.register_namespace('r', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships')
+            
+            tree = ET.parse(sheet_xml_path)
+            root = tree.getroot()
+            
+            ns = {'main': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+            
+            # Find sheet data
+            sheet_data = root.find('main:sheetData', ns)
+            if sheet_data is None:
+                raise Exception("Could not find sheetData in worksheet")
+            
+            # Create a simple cell value setter
+            def set_cell(sheet_data, cell_ref, value):
+                """Set a cell value in the XML"""
+                # Parse cell reference (e.g., "A12")
+                import re
+                match = re.match(r'([A-Z]+)(\d+)', cell_ref)
+                if not match:
+                    return
+                
+                col_letters, row_num = match.groups()
+                row_num = int(row_num)
+                
+                # Find or create row
+                row = None
+                for r in sheet_data.findall('main:row', ns):
+                    if int(r.get('r')) == row_num:
+                        row = r
+                        break
+                
+                if row is None:
+                    row = ET.SubElement(sheet_data, '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}row')
+                    row.set('r', str(row_num))
+                
+                # Find or create cell
+                cell_address = f'{col_letters}{row_num}'
+                cell = None
+                for c in row.findall('main:c', ns):
+                    if c.get('r') == cell_address:
+                        cell = c
+                        break
+                
+                if cell is None:
+                    cell = ET.SubElement(row, '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}c')
+                    cell.set('r', cell_address)
+                
+                # Skip if cell has a formula - preserve template formulas
+                if cell.find('main:f', ns) is not None:
+                    return
+                
+                # Remove existing children to avoid keeping shared references
+                for child in list(cell):
+                    cell.remove(child)
+
+                # Set value correctly depending on type.
+                # For numbers, use a plain <v> element. For strings, use inlineStr
+                if value is None:
+                    return
+                # Datetime: write as Excel serial number so Excel will display formatted date/time
+                if isinstance(value, datetime):
+                    # Excel epoch: 1899-12-30
+                    epoch = datetime(1899, 12, 30)
+                    delta = value - epoch
+                    serial = delta.total_seconds() / 86400.0
+                    # Write numeric value
+                    cell.attrib.pop('t', None)
+                    v = ET.SubElement(cell, '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v')
+                    # keep full precision
+                    v.text = repr(serial)
+                # Numeric types (int/float)
+                elif isinstance(value, (int, float)):
+                    cell.attrib.pop('t', None)
+                    v = ET.SubElement(cell, '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v')
+                    v.text = str(value)
+                else:
+                    # Use inline string to avoid messing with sharedStrings.xml
+                    cell.set('t', 'inlineStr')
+                    is_el = ET.SubElement(cell, '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is')
+                    t_el = ET.SubElement(is_el, '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}t')
+                    t_el.text = str(value)
+            
+            # Set required fields
+            set_cell(sheet_data, 'D4', datetime.now())
+            set_cell(sheet_data, 'A12', company_name)
+            set_cell(sheet_data, 'A13', sakadastro)
+            set_cell(sheet_data, 'A14', address)
+            set_cell(sheet_data, 'D5', invoice_number)
+            
+            # Helper to clear cached value from formula cells so Excel recalculates
+            def clear_formula_cache(sheet_data, cell_ref):
+                """Remove <v> element from formula cells to force recalculation"""
+                import re
+                match = re.match(r'([A-Z]+)(\d+)', cell_ref)
+                if not match:
+                    return
+                col_letters, row_num = match.groups()
+                row_num = int(row_num)
+                cell_address = f'{col_letters}{row_num}'
+                for r in sheet_data.findall('main:row', ns):
+                    if int(r.get('r')) == row_num:
+                        for c in r.findall('main:c', ns):
+                            if c.get('r') == cell_address:
+                                # If this cell has a formula, remove cached <v>
+                                if c.find('main:f', ns) is not None:
+                                    v_elem = c.find('main:v', ns)
+                                    if v_elem is not None:
+                                        c.remove(v_elem)
+                                break
+                        break
+            
+            # Set items
+            start_row = 17
+            for i, item in enumerate(items):
+                if i >= 8:
+                    break
+                row = start_row + i
+                if isinstance(item, dict):
+                    set_cell(sheet_data, f'A{row}', item.get('type', ''))
+                    set_cell(sheet_data, f'B{row}', item.get('quantity', ''))
+                    set_cell(sheet_data, f'C{row}', item.get('price', ''))
+                    # Clear cached value from D row so formula recalculates
+                    clear_formula_cache(sheet_data, f'D{row}')
+            
+            # Also clear D36 (likely a sum formula) to force recalculation
+            clear_formula_cache(sheet_data, 'D36')
+            
+            # Save modified XML
+            tree.write(sheet_xml_path, encoding='utf-8', xml_declaration=True)
+            
+            # Re-zip the file
+            with ZipFile(excel_path, 'w', ZIP_DEFLATED) as z:
+                for root_dir, dirs, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path = os.path.join(root_dir, file)
+                        arcname = os.path.relpath(file_path, temp_dir)
+                        z.write(file_path, arcname)
+            
+            # Clean up temp directory
+            shutil.rmtree(temp_dir)
+            
+            print(f"Excel file modified in-place: {excel_path}")
+            
+        except Exception as e:
+            print(f"Error modifying Excel in-place: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _preserve_images_in_copy(self, template_path, output_path):
+        """
+        Manually copy images, drawings, and relationships from template to output.
+        This is a workaround for openpyxl not preserving images and drawing references.
+        """
+        try:
+            from zipfile import ZipFile, ZIP_DEFLATED
+            import tempfile
+            
+            # Read from template
+            with ZipFile(template_path, 'r') as template_zip:
+                # Find all files that need to be preserved
+                files_to_preserve = []
+                
+                # Media/image files
+                for f in template_zip.namelist():
+                    if f.startswith('xl/media/') or f.startswith('xl/drawings/'):
+                        files_to_preserve.append(f)
+                
+                if not files_to_preserve:
+                    return  # No images/drawings to preserve
+                
+                # Also get relationship files for drawings
+                for f in template_zip.namelist():
+                    if 'xl/drawings' in f and '.rels' in f:
+                        files_to_preserve.append(f)
+                    if f == 'xl/worksheets/_rels/sheet1.xml.rels':
+                        files_to_preserve.append(f)
+                
+                if not files_to_preserve:
+                    return
+                
+                # Create temp file
+                with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as temp_file:
+                    temp_path = temp_file.name
+                
+                # Copy output to temp
+                shutil.copy2(output_path, temp_path)
+                
+                # Add preserved files to output
+                with ZipFile(temp_path, 'a', ZIP_DEFLATED) as output_zip:
+                    for file_path in files_to_preserve:
+                        try:
+                            if file_path not in output_zip.namelist():
+                                file_data = template_zip.read(file_path)
+                                output_zip.writestr(file_path, file_data)
+                        except Exception as e:
+                            print(f"Could not preserve {file_path}: {e}")
+                
+                # Copy temp back to output
+                shutil.copy2(temp_path, output_path)
+                
+                # Clean up temp
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+                
+                print(f"Preserved {len(files_to_preserve)} drawing/image files")
+        except Exception as e:
+            print(f"Note: Could not preserve images: {e}")
+            # Don't fail - continue without images
+    
     def generate(self, output_path, company_name, sakadastro, address, invoice_number, changes=None, items=None):
         """
         Generate a new Excel file based on template with specified changes.
-        
+
         Args:
             output_path (str): Path where the new Excel file will be saved
-            company_name (str): Company name for cell A12
-            sakadastro (str): Sakadastro value for cell A13
-            address (str): Address for cell A14
+            company_name (str): Company name for cell A12 (will be prefixed with "კომპ/სახელი")
+            sakadastro (str): Sakadastro value for cell A13 (will be prefixed with "ს/კ")
+            address (str): Address for cell A14 (will be prefixed with "მისამართი")
             invoice_number (str/int): Invoice number for cell D5
             changes (dict): Additional cell changes (optional)
                           Example: {'A1': 'New Value', 'B2': 123, 'C3': 45.67}
@@ -107,7 +347,7 @@ class ExcelTemplateGenerator:
                          Each item is a dict with keys: 'type', 'quantity', 'price'
                          Example: [{'type': 'Service A', 'quantity': 2, 'price': 100},
                                   {'type': 'Service B', 'quantity': 1, 'price': 50}]
-        
+
         Returns:
             str: Path to the generated file
         """
@@ -115,66 +355,33 @@ class ExcelTemplateGenerator:
             changes = {}
         if items is None:
             items = []
-        
-        # Load the template
-        wb = self._load_workbook(self.template_path)
-        ws = wb.active
-        
-        # Always set required fields
-        ws['D4'] = datetime.now()  # Current date
-        ws['A12'] = company_name
-        ws['A13'] = sakadastro
-        ws['A14'] = address
-        ws['D5'] = invoice_number
-        
-        # Fill items in rows 17-24
-        start_row = 17
-        for i, item in enumerate(items):
-            if i >= 8:  # Only 8 rows available (17-24)
-                break
-            
-            row = start_row + i
-            if isinstance(item, dict):
-                ws[f'A{row}'] = item.get('type', '')
-                ws[f'B{row}'] = item.get('quantity', '')
-                ws[f'C{row}'] = item.get('price', '')
-                # Set formula for D column (sum_price = quantity * price)
-                ws[f'D{row}'] = f'=B{row}*C{row}'
-            else:
-                # Support tuple format (type, quantity, price)
-                ws[f'A{row}'] = item[0] if len(item) > 0 else ''
-                ws[f'B{row}'] = item[1] if len(item) > 1 else ''
-                ws[f'C{row}'] = item[2] if len(item) > 2 else ''
-                # Set formula for D column
-                ws[f'D{row}'] = f'=B{row}*C{row}'
-        
-        # Set D36 to sum of D17:D24
-        ws['D36'] = '=SUM(D17:D24)'
-        
-        # Apply additional changes to each specified cell
-        for cell_ref, value in changes.items():
-            try:
-                cell = ws[cell_ref]
-                cell.value = value
-            except Exception as e:
-                print(f"Error setting cell {cell_ref}: {e}")
-        
+
+        # Prepend prefixes to the required fields
+        company_name = f"კომპ/სახელი {company_name}" if company_name else "კომპ/სახელი"
+        sakadastro = f"ს/კ {sakadastro}" if sakadastro else "ს/კ"
+        address = f"მისამართი {address}" if address else "მისამართი"
+
         # Create output directory if it doesn't exist
         output_dir = os.path.dirname(output_path)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
-        
-        # Save the modified workbook
-        wb.save(output_path)
+
+        # IMPORTANT: Copy the entire template file first to preserve images, formatting, and all content
+        shutil.copy2(self.template_path, output_path)
+
+        # Modify the copied file directly by extracting, modifying XML, and re-zipping
+        # This preserves ALL content including images and their references
+        self._modify_excel_in_place(output_path, company_name, sakadastro, address, invoice_number, changes, items)
+
         print(f"Excel file generated: {output_path}")
-        
+
         # Clean up temporary file if it was created
         if hasattr(self, '_temp_file') and os.path.exists(self._temp_file):
             try:
                 os.remove(self._temp_file)
             except:
                 pass
-        
+
         return output_path
     
     def generate_pdf(self, excel_path, pdf_path=None):
@@ -197,17 +404,22 @@ class ExcelTemplateGenerator:
             pdf_path = os.path.splitext(excel_path)[0] + '.pdf'
         
         try:
-            # Use LibreOffice to convert Excel to PDF
+            # Use LibreOffice to convert Excel to PDF with explicit image inclusion
             # --headless: Run without GUI
-            # --convert-to pdf: Convert to PDF
+            # --convert-to pdf: Convert to PDF with default settings
             # --outdir: Output directory
             
             output_dir = os.path.dirname(pdf_path) or '.'
             excel_abs_path = os.path.abspath(excel_path)
             
+            # Ensure output directory exists
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir, exist_ok=True)
+            
             command = [
                 '/snap/bin/libreoffice',
                 '--headless',
+                '--norestore',  # Don't restore previous session
                 '--convert-to', 'pdf',
                 '--outdir', output_dir,
                 excel_abs_path
@@ -215,10 +427,16 @@ class ExcelTemplateGenerator:
             
             # Try standard libreoffice if snap version not available
             try:
-                subprocess.run(command, check=True, capture_output=True)
+                result = subprocess.run(command, check=True, capture_output=True, timeout=60)
             except FileNotFoundError:
                 command[0] = 'libreoffice'
-                subprocess.run(command, check=True, capture_output=True)
+                result = subprocess.run(command, check=True, capture_output=True, timeout=60)
+            except subprocess.TimeoutExpired:
+                raise Exception("LibreOffice PDF conversion timed out after 60 seconds")
+            
+            # Verify PDF was created
+            if not os.path.exists(pdf_path):
+                raise Exception(f"PDF file was not created at {pdf_path}")
             
             print(f"PDF file generated: {pdf_path}")
             return pdf_path
@@ -307,8 +525,3 @@ if __name__ == "__main__":
     ]
     
     generator.generate_multiple(".", changes_list)
-cd /tmp
-curl -L --output :.tgz "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.tgz"
-tar -xzf cloudflared.tgz
-sudo mv cloudflared /usr/local/bin/
-sudo chmod +x /usr/local/bin/cloudflared

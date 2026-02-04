@@ -2,25 +2,39 @@
 Simple CLI interface for Excel Template Generator
 """
 
+import os
 from excel_generator import ExcelTemplateGenerator
 
 
 def main():
     """Interactive command-line interface for generating Excel files."""
-    
+
     template_path = "template.xlsx"
+    if not os.path.exists(template_path):
+        print(f"Error: Template file '{template_path}' not found!")
+        return
+
     generator = ExcelTemplateGenerator(template_path)
     
     print("=" * 50)
     print("Excel Template Generator")
     print("=" * 50)
     
-    output_file = input("\nEnter output filename (e.g., output.xlsx): ").strip()
+    # Get filename without extension
+    filename = input("\nEnter output filename (without extension, e.g., 'lexo'): ").strip()
+    # Remove extension if user included it
+    if filename.endswith(('.xlsx', '.xls', '.pdf')):
+        filename = filename.rsplit('.', 1)[0]
+
+    # Sanitize filename to handle Unicode characters properly
+    from app import safe_filename
+    filename = safe_filename(filename)
+    output_file = f"{filename}.xlsx"
     
     # Required fields
-    company_name = input("Enter company name (A12): ").strip()
-    sakadastro = input("Enter sakadastro (A13): ").strip()
-    address = input("Enter address (A14): ").strip()
+    company_name = input("Enter company name (A12 - will be prefixed with 'კომპ/სახელი'): ").strip()
+    sakadastro = input("Enter sakadastro (A13 - will be prefixed with 'ს/კ'): ").strip()
+    address = input("Enter address (A14 - will be prefixed with 'მისამართი'): ").strip()
     invoice_number = input("Enter invoice number (D5): ").strip()
     
     # Optional items (rows 17-24)
@@ -86,11 +100,10 @@ def main():
     # Ask if user wants to generate PDF
     generate_pdf = input("\nGenerate PDF from the Excel file? (y/n): ").strip().lower() == 'y'
     if generate_pdf:
-        pdf_file = input("Enter PDF filename (leave empty for auto-generated name): ").strip()
-        if pdf_file:
-            generator.generate_pdf(output_file, pdf_file)
-        else:
-            generator.generate_pdf(output_file)
+        # Automatically use same filename with .pdf extension
+        pdf_file = f"{filename}.pdf"
+        print(f"Generating PDF: {pdf_file}")
+        generator.generate_pdf(output_file, pdf_file)
 
 
 if __name__ == "__main__":

@@ -4,16 +4,45 @@ Responsive Flask app that works on mobile and desktop
 """
 
 from flask import Flask, render_template, request, send_file, jsonify
+from werkzeug.middleware.proxy_fix import ProxyFix
 import os
 import json
 from datetime import datetime
 from excel_generator import ExcelTemplateGenerator
 from werkzeug.utils import secure_filename
 import traceback
+import re
+
+def safe_filename(filename):
+    """Create safe filename while preserving Unicode characters"""
+    # Remove leading/trailing whitespace
+    filename = filename.strip()
+    # Replace spaces with underscores
+    filename = filename.replace(' ', '_')
+    # Remove only truly problematic characters: / \ : * ? " < > |
+    filename = re.sub(r'[/\\:*?"<>|]', '', filename)
+    # Remove leading dots
+    filename = filename.lstrip('.')
+
+    # Only use secure_filename for ASCII characters, otherwise keep Unicode
+    # Check if the filename contains non-ASCII characters
+    try:
+        filename.encode('ascii')
+        # If it's all ASCII, use secure_filename for extra safety
+        from werkzeug.utils import secure_filename
+        filename = secure_filename(filename)
+    except UnicodeEncodeError:
+        # If it contains Unicode characters, skip secure_filename to preserve them
+        pass
+
+    return filename if filename else 'output'
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
 app.config['UPLOAD_FOLDER'] = 'uploads'
+
+# Apply ProxyFix to handle requests coming through reverse proxies/tunnels
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # Create uploads folder
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
@@ -73,20 +102,17 @@ def generate():
                 })
         
         # Create safe filename - keep the alphanumeric and basic chars, handle dots properly
-        # Remove extension first
-        base_name = secure_filename(output_filename)
+        # Use custom safe_filename function that preserves Unicode
+        base_name = safe_filename(output_filename)
         # Remove any trailing dots/extensions that secure_filename might have removed
         base_name = base_name.replace('.xlsx', '').replace('.xls', '')
         # If empty, use default
         if not base_name:
-            base_name = 'invoice'
+            base_name = 'output'
         
-        safe_filename = base_name + '.xlsx'
+        filename_with_ext = base_name + '.xlsx'
         
-        print(f"Original filename: {output_filename}")
-        print(f"Safe filename: {safe_filename}")
-        
-        excel_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_filename)
+        excel_path = os.path.join(app.config['UPLOAD_FOLDER'], filename_with_ext)
         
         # Generate Excel
         generator.generate(
@@ -101,13 +127,13 @@ def generate():
         # Generate PDF if requested
         pdf_path = None
         if generate_pdf:
-            pdf_filename = safe_filename.replace('.xlsx', '.pdf')
+            pdf_filename = filename_with_ext.replace('.xlsx', '.pdf')
             pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
             generator.generate_pdf(excel_path, pdf_path)
         
         return jsonify({
             'success': True,
-            'excel_file': safe_filename,
+            'excel_file': filename_with_ext,
             'pdf_file': os.path.basename(pdf_path) if pdf_path else None,
             'message': 'Files generated successfully!'
         })
@@ -120,17 +146,18 @@ def generate():
 def download(filename):
     """Download generated file"""
     try:
-        filename = secure_filename(filename)
+        filename = safe_filename(filename)
         file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        
+
         print(f"Download request for: {filename}")
         print(f"Full path: {file_path}")
         print(f"File exists: {os.path.exists(file_path)}")
-        
+
         if not os.path.exists(file_path):
             print(f"File not found: {file_path}")
-            return jsonify({'error': f'File not found: {filename}'}), 404
-        
+            # Return a simple error message instead of JSON for direct browser access
+            return f"File not found: {filename}", 404
+
         # Determine mimetype
         if filename.endswith('.pdf'):
             mimetype = 'application/pdf'
@@ -138,9 +165,9 @@ def download(filename):
             mimetype = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         else:
             mimetype = 'application/octet-stream'
-        
+
         print(f"Sending file with mimetype: {mimetype}")
-        
+
         return send_file(
             file_path,
             mimetype=mimetype,
@@ -150,7 +177,8 @@ def download(filename):
     except Exception as e:
         print(f"Download error: {e}")
         print(traceback.format_exc())
-        return jsonify({'error': str(e)}), 500
+        # Return a simple error message instead of JSON
+        return f"Download error: {str(e)}", 500
 
 @app.route('/health')
 def health():
