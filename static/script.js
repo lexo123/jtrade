@@ -151,11 +151,32 @@ function displayResults(data) {
 
 function downloadFile(filename) {
     console.log('Attempting to download:', filename);
-    
+
     const url = `/api/download/${encodeURIComponent(filename)}`;
     console.log('Download URL:', url);
-    
-    // Fetch the file
+
+    // Detect iOS devices (iPad, iPhone, iPod)
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+    // For PDF files on iOS devices, we need to handle the download differently
+    if (filename.toLowerCase().endsWith('.pdf') && isIOS) {
+        // For iOS devices, open the URL directly which should trigger download due to server-side headers
+        // Using a temporary iframe to avoid leaving the page
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = url;
+        document.body.appendChild(iframe);
+        
+        // Remove the iframe after a delay
+        setTimeout(() => {
+            document.body.removeChild(iframe);
+        }, 1000);
+        
+        console.log('iOS PDF download triggered via iframe');
+        return;
+    }
+
+    // Fetch the file for other cases
     fetch(url)
         .then(response => {
             console.log('Response status:', response.status);

@@ -168,6 +168,8 @@ def download(filename):
 
         print(f"Sending file with mimetype: {mimetype}")
 
+        # Send file with attachment headers to force download
+        # This should work for all browsers including iOS Safari
         return send_file(
             file_path,
             mimetype=mimetype,
